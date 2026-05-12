@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
 use crate::app::{App, Mode};
@@ -36,6 +36,10 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
             Span::styled("Message: ", Style::new().fg(Color::DarkGray)),
             Span::raw(app.commit_text()),
             Span::styled(cursor(app), Style::new().fg(Color::Cyan)),
+        ]),
+        Mode::Confirm => Line::from(vec![
+            Span::styled("Commit: ", Style::new().fg(Color::DarkGray)),
+            Span::raw(app.pending_message().unwrap_or_default()),
         ]),
         _ => Line::from(vec![
             Span::styled("Search: ", Style::new().fg(Color::DarkGray)),
@@ -70,29 +74,53 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let items = app.filtered().iter().enumerate().map(|(row, emoji_index)| {
-        let emoji = &app.emojis()[*emoji_index];
-        let marker = if row == app.selected() { ">" } else { " " };
-        let style = if row == app.selected() {
-            Style::new().fg(Color::Black).bg(Color::Cyan)
-        } else {
-            Style::default()
-        };
+    let visible_rows = area.height.saturating_sub(2) as usize;
+    let start = list_start(app.selected(), visible_rows, app.filtered().len());
+    let end = start.saturating_add(visible_rows).min(app.filtered().len());
 
-        ListItem::new(Line::from(vec![
-            Span::raw(format!("{marker} {} ", emoji.icon)),
-            Span::styled(emoji.code, Style::new().add_modifier(Modifier::BOLD)),
-            Span::raw(format!("  {}", emoji.description)),
-        ]))
-        .style(style)
-    });
+    let items = app.filtered()[start..end]
+        .iter()
+        .enumerate()
+        .map(|(offset, emoji_index)| {
+            let row = start + offset;
+            let emoji = &app.emojis()[*emoji_index];
+            let marker = if row == app.selected() { ">" } else { " " };
+            let style = if row == app.selected() {
+                Style::new().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::raw(format!("{marker} {} ", emoji.icon)),
+                Span::styled(emoji.code, Style::new().add_modifier(Modifier::BOLD)),
+                Span::raw(format!("  {}", emoji.description)),
+            ]))
+            .style(style)
+        });
 
     let block = Block::default()
-        .title(" Emojis ")
+        .title(format!(
+            " Emojis {}-{}/{} ",
+            start.saturating_add(1).min(app.filtered().len()),
+            end,
+            app.filtered().len()
+        ))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
 
     frame.render_widget(List::new(items).block(block), area);
+}
+
+fn list_start(selected: usize, visible_rows: usize, total: usize) -> usize {
+    if visible_rows == 0 || total <= visible_rows {
+        return 0;
+    }
+
+    let half_page = visible_rows / 2;
+    let max_start = total - visible_rows;
+
+    selected.saturating_sub(half_page).min(max_start)
 }
 
 fn render_detail(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -116,10 +144,8 @@ fn render_detail(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 Span::raw(emoji.description_zh),
             ]),
             Line::raw(""),
-            Line::from(vec![
-                Span::styled("Keywords: ", Color::DarkGray),
-                Span::raw(emoji.keywords.join(", ")),
-            ]),
+            Line::from(Span::styled("Keywords:", Color::DarkGray)),
+            Line::raw(emoji.keywords.join(", ")),
         ],
         None => vec![Line::raw("No emoji matched your search.")],
     };
@@ -129,7 +155,12 @@ fn render_detail(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
 
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(block),
+        area,
+    );
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -137,6 +168,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Mode::Browse => "↑/↓ move  / search  Enter select  q quit",
         Mode::Search => "type to filter  ↑/↓ move  Enter select  Esc close  Ctrl-C quit",
         Mode::Message => "type message  Enter confirm  Esc cancel  Ctrl-C quit",
+        Mode::Confirm => "Enter commit  Esc edit  Ctrl-C quit",
     };
 
     let line = Line::from(vec![
@@ -150,7 +182,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .border_type(BorderType::Rounded);
     frame.render_widget(Paragraph::new(line).block(block), area);
 
-    if matches!(app.mode(), Mode::Search | Mode::Message) {
+    if matches!(app.mode(), Mode::Search | Mode::Message | Mode::Confirm) {
         draw_input_hint(frame, area, app.mode());
     }
 }
@@ -159,6 +191,7 @@ fn draw_input_hint(frame: &mut Frame<'_>, footer: Rect, mode: Mode) {
     let text = match mode {
         Mode::Search => "Search mode",
         Mode::Message => "Message input",
+        Mode::Confirm => "Confirm commit",
         Mode::Browse => "",
     };
 
@@ -181,5 +214,6 @@ fn cursor(app: &App) -> &'static str {
     match app.mode() {
         Mode::Browse => "",
         Mode::Search | Mode::Message => "█",
+        Mode::Confirm => "",
     }
 }

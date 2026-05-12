@@ -8,6 +8,7 @@ pub enum Mode {
     Browse,
     Search,
     Message,
+    Confirm,
 }
 
 #[derive(Debug)]
@@ -88,6 +89,13 @@ impl App {
         self.submitted_message.as_deref()
     }
 
+    pub fn pending_message(&self) -> Option<String> {
+        let emoji = self.picked_emoji()?;
+        let text = self.commit_text.trim();
+
+        (!text.is_empty()).then(|| format!("{} {}", emoji.code, text))
+    }
+
     pub fn mode(&self) -> Mode {
         self.mode
     }
@@ -109,6 +117,7 @@ impl App {
             Mode::Browse => self.handle_browse_key(key),
             Mode::Search => self.handle_search_key(key),
             Mode::Message => self.handle_message_key(key),
+            Mode::Confirm => self.handle_confirm_key(key),
         }
 
         Ok(())
@@ -165,13 +174,25 @@ impl App {
                 self.picked = None;
                 self.message = "Message input canceled".into();
             }
-            KeyCode::Enter => self.submit_message(),
+            KeyCode::Enter => self.review_message(),
             KeyCode::Backspace => {
                 self.commit_text.pop();
             }
             KeyCode::Char(ch) => {
                 self.commit_text.push(ch);
             }
+            _ => {}
+        }
+    }
+
+    fn handle_confirm_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit(),
+            KeyCode::Esc => {
+                self.mode = Mode::Message;
+                self.message = "Edit commit message".into();
+            }
+            KeyCode::Enter => self.submit_message(),
             _ => {}
         }
     }
@@ -230,7 +251,7 @@ impl App {
         }
     }
 
-    fn submit_message(&mut self) {
+    fn review_message(&mut self) {
         let text = self.commit_text.trim();
 
         if text.is_empty() {
@@ -238,8 +259,15 @@ impl App {
             return;
         }
 
-        if let Some(emoji) = self.picked_emoji() {
-            self.submitted_message = Some(format!("{} {}", emoji.code, text));
+        if self.picked_emoji().is_some() {
+            self.mode = Mode::Confirm;
+            self.message = "Review commit message. Enter to commit, Esc to edit.".into();
+        }
+    }
+
+    fn submit_message(&mut self) {
+        if let Some(message) = self.pending_message() {
+            self.submitted_message = Some(message);
             self.should_quit = true;
         }
     }
